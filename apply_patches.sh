@@ -252,7 +252,8 @@ TC=/root/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64
 #     x86_64-unknown-linux-gnu 都可能排在 aarch64 前面，取第一个会命中错架构。
 # 正确做法：按 aarch64 前缀 glob（不写死版本号），并对两个库做存在性断言。
 LIB=$(ls -d "$TC"/lib/clang/*/lib/linux/aarch64 2>/dev/null | tail -1)
-[ -n "$LIB" ] || die "在 $TC/lib/clang/*/lib/linux/ 下找不到 aarch64 目录"
+# 这一行在 die() 定义之前执行，不能调 die，用内联的 printf+exit 保证错误信息不丢
+[ -n "$LIB" ] || { printf '\033[31m[FAIL]\033[0m 在 %s 下找不到 aarch64 目录\n' "$TC/lib/clang/*/lib/linux/" >&2; exit 1; }
 
 step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 info() { printf '  %s\n' "$*"; }
@@ -352,15 +353,30 @@ case "$TID" in
     *) die "从 $BUILD 推不出 title ID（得到 $TID）" ;;
 esac
 
-APK0="$(ls -t "$ROM"/*.apk 2>/dev/null | head -1 || true)"
-[ -n "$APK0" ] || die "porter 没产出 APK"
-STEM="$(basename "$APK0" .apk)"
-DATA="$ROM/$STEM-data"
+# STEM 优先从数据包目录推，避免第二次运行误选 -termux.apk（那样 STEM 变 X-termux、
+# DATA 不存在、mods 一个都不内包，且输出名会变成 X-termux-termux.apk）
+DATA="$(ls -d "$ROM"/*-data 2>/dev/null | head -1 || true)"
+if [ -n "$DATA" ]; then
+    STEM="$(basename "$DATA" -data)"
+else
+    APK0="$(ls -t "$ROM"/*.apk 2>/dev/null | grep -v -- '-termux\.apk$' | head -1 || true)"
+    [ -n "$APK0" ] || die "porter 没产出 APK，也没生成 *-data 目录"
+    STEM="$(basename "$APK0" .apk)"
+    DATA="$ROM/$STEM-data"
+fi
+[ -d "$DATA" ] || die "数据包目录不存在：$DATA"
 SHADERS="$BUILD/android/shaders.dmsv"
 [ -f "$SHADERS" ] || die "没有 shader 包 $SHADERS（[4/8]/[5/8] 阶段失败？）"
 
 step "2/3 重编宿主（改了 C 必须重编，否则 APK 里还是旧逻辑）"
-export DM_GAMES_DIR="$BUILD/profile"
+# 版本未注册时 porter 会把 profile 放到 profile-derived/，两种都要试
+if [ -d "$BUILD/profile/$TID" ]; then
+    export DM_GAMES_DIR="$BUILD/profile"
+elif [ -d "$BUILD/profile-derived/$TID" ]; then
+    export DM_GAMES_DIR="$BUILD/profile-derived"
+else
+    die "找不到 $TID 的 profile（profile/ 与 profile-derived/ 都没有）"
+fi
 export ANDROID_NDK_HOME=/root/android-ndk-r27c
 python3 nxnative/dm/android/build.py --game "$TID" --release --lib
 SO="$REPO/nxnative/dm/android/out/$TID-release/libdmhost.so"
@@ -385,9 +401,10 @@ python3 nxnative/dm/android/apk/mkapk.py \
     --asset "shaders.dmsv=$SHADERS" \
     "${ARGS[@]}"
 
-unzip -l "$OUT" | grep -q ' assets/shaders.dmsv$' || die "APK 里没有 assets/shaders.dmsv"
+unzip -l "$OUT" | grep -q 'assets/shaders.dmsv' || die "APK 里没有 assets/shaders.dmsv"
+SH_MB=$(( $(stat -c %s "$SHADERS") / 1048576 ))
 MB=$(( $(stat -c %s "$OUT") / 1048576 ))
-[ "$MB" -ge 19 ] || die "APK 只有 ${MB} MB（应 >= 19 MB）——多半是 shader 包没打进去"
+[ "$MB" -ge $(( SH_MB - 1 )) ] || die "APK ${MB} MB 小于 shader 包 ${SH_MB} MB —— shader 没打进去"
 
 printf '\n\033[1m完成。\033[0m\n'
 printf '  APK   %s (%s MB)\n' "$OUT" "$MB"

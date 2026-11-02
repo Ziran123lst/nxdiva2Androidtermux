@@ -59,7 +59,8 @@ TC=/root/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64
 #     x86_64-unknown-linux-gnu 都可能排在 aarch64 前面，取第一个会命中错架构。
 # 正确做法：按 aarch64 前缀 glob（不写死版本号），并对两个库做存在性断言。
 LIB=$(ls -d "$TC"/lib/clang/*/lib/linux/aarch64 2>/dev/null | tail -1)
-[ -n "$LIB" ] || die "在 $TC/lib/clang/*/lib/linux/ 下找不到 aarch64 目录"
+# 这一行在 die() 定义之前执行，不能调 die，用内联的 printf+exit 保证错误信息不丢
+[ -n "$LIB" ] || { printf '\033[31m[FAIL]\033[0m 在 %s 下找不到 aarch64 目录\n' "$TC/lib/clang/*/lib/linux/" >&2; exit 1; }
 
 step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 info() { printf '  %s\n' "$*"; }
