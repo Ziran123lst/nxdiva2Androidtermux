@@ -30,8 +30,11 @@ import pathlib, sys
 
 def fail(msg):
     print('\033[31m[FAIL]\033[0m ' + msg, file=sys.stderr)
-    print('上游源码可能已改动 —— 请人工核对新的源码后更新本脚本里的锚点，', file=sys.stderr)
-    print('不要删掉断言改成盲替换。', file=sys.stderr)
+    print('上游源码可能已改动。正确处置（不要删断言改成盲替换，也不要只停在报错）：', file=sys.stderr)
+    print('  1) git fetch upstream', file=sys.stderr)
+    print('  2) git diff upstream/main -- <被改的文件>   # 看上游到底改了哪一段', file=sys.stderr)
+    print('  3) 把本脚本里对应的 OLD_xx 字符串更新成当前上游文本（保留断言），然后重跑 apply_patches.sh', file=sys.stderr)
+    print('直接把断言删掉改成 replace(old, new) 无脑替换，会在大版本变动时静默破坏源码，比报错更危险。', file=sys.stderr)
     sys.exit(1)
 
 def sub(path, old, new, name):
@@ -48,7 +51,7 @@ def sub(path, old, new, name):
         return
     n = s.count(old)
     if n != 1:
-        fail(f'{name}: 锚点在 {path} 里出现了 {n} 次（应为 1 次）。\n'
+        fail(f'{name}: 锚点在 {path} 里出现了 {n} 次（应为 1 次），上游很可能改了这段源码。\n'
              f'        锚点首行：{old.splitlines()[0][:110]}')
     p.write_text(s.replace(old, new, 1), encoding='utf-8')
     print(f'  {name}: ok')
@@ -242,9 +245,14 @@ set -euo pipefail
 
 P=/data/data/com.termux/files/usr            # Termux 的 clang 通过 nx.sh 的 bind 挂在这里
 TC=/root/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64
-# libunwind.a 必须取 aarch64 那份。不要用 find ... | head -1 去找：
-# 它会先命中 .../lib/linux/i386-unknown-linux-gnu，链接时报 unable to find library -l:libunwind.a
-LIB="$TC/lib/clang/18/lib/linux/aarch64"
+# aarch64 的 libunwind.a / libclang_rt.builtins 必须显式匹配 aarch64 目录，两点都不要踩：
+#   * 不要写死 clang 主版本号（NDK r28 起 18→19/20），否则目录不存在，链接报
+#     unable to find library -l:libunwind.a。
+#   * 不要用 find ... | head -1 去找：find 返回顺序里 i386-unknown-linux-gnu、
+#     x86_64-unknown-linux-gnu 都可能排在 aarch64 前面，取第一个会命中错架构。
+# 正确做法：按 aarch64 前缀 glob（不写死版本号），并对两个库做存在性断言。
+LIB=$(ls -d "$TC"/lib/clang/*/lib/linux/aarch64 2>/dev/null | tail -1)
+[ -n "$LIB" ] || die "在 $TC/lib/clang/*/lib/linux/ 下找不到 aarch64 目录"
 
 step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 info() { printf '  %s\n' "$*"; }
@@ -275,11 +283,10 @@ grep -q 'Pkg.Revision = 27.2.12479018' /root/android-ndk-r27c/source.properties 
     || die "NDK 版本不对：$(grep Pkg.Revision /root/android-ndk-r27c/source.properties)，必须是 27.2.12479018"
 
 step "4/4 编译器替换（关键一步）"
-[ -f "$LIB/libunwind.a" ] || {
-    echo "libunwind.a 不在 $LIB，实际有这些目录：" >&2
-    ls -1 "$TC"/lib/clang/*/lib/linux 2>/dev/null >&2 || true
-    die "找不到 aarch64 的 libunwind.a —— 请人工确认 NDK 的 clang 版本目录，不要退回 find | head -1"
-}
+# -L 指向 aarch64 这一份，同时解决 libunwind.a 与 libclang_rt.builtins。
+# 只 symlink libunwind.a 的话，下一步会报 builtins 缺失。
+[ -f "$LIB/libunwind.a" ] || die "找不到 $LIB/libunwind.a —— aarch64 的 libunwind.a 缺失"
+[ -f "$LIB/libclang_rt.builtins-aarch64-android.a" ] || die "找不到 $LIB/libclang_rt.builtins-aarch64-android.a —— aarch64 的 builtins 缺失"
 [ -e "$TC/bin/clang.real" ]   || mv "$TC/bin/clang"   "$TC/bin/clang.real"
 [ -e "$TC/bin/clang++.real" ] || mv "$TC/bin/clang++" "$TC/bin/clang++.real"
 printf '#!/bin/sh\nexec %s/bin/clang --sysroot=%s/sysroot -L%s "$@"\n'  "$P" "$TC" "$LIB" > "$TC/bin/clang"
@@ -464,9 +471,11 @@ Android 外部存储是 `noexec`，工具会在游戏目录旁编译并执行 `n
 （sysroot、头文件、aarch64 stub 库）。所以把 `clang`/`clang++` 换成转发到 Termux clang 的
 包装脚本，NDK 只当数据用。
 
-包装脚本里的 `-L` 必须指向 **`.../lib/clang/18/lib/linux/aarch64`**。用
-`find ... | head -1` 找 libunwind 会先命中 `i386-unknown-linux-gnu`，链接时报
-`unable to find library -l:libunwind.a`。脚本里是显式指定并带存在性断言的。
+包装脚本里的 `-L` 必须指向 **aarch64 的那一份 `.../lib/clang/<ver>/lib/linux/aarch64`**，而不是写死
+`clang/18`，也不要用 `find ... | head -1` 去找。`find` 返回顺序里 `i386-unknown-linux-gnu`、
+`x86_64-unknown-linux-gnu` 都可能排在 `aarch64` 前面，取第一个会命中错架构，链接时报
+`unable to find library -l:libunwind.a`。脚本里按 `aarch64` 前缀 glob（不写死版本号），并对
+`libunwind.a` 与 `libclang_rt.builtins-aarch64-android.a` 两个库都做存在性断言。
 
 自检必须出现 `ARM aarch64`。
 
@@ -529,12 +538,16 @@ env.txt  settings.txt  nx2a-data.json  nintendo_ext.ttf
 > **上游一旦改了被替换的源码文本，`apply_patches.sh` 会断言失败并中止。** 这是刻意的：
 > 请人工核对新源码后再改锚点，**不要删掉断言改成盲替换**。
 
+> **pchtxt 偏移换算（本机实测结论，非推断）**：本作 `main` 的段文件偏移是 `0x101`，所以
+> **pchtxt 文件偏移 = 补丁偏移 + 0x101**（不是 +0x100）。用 +0x100 会在 `DT_INIT` 阶段 `SIGILL`。
+> 自己改补丁时务必按 `0x101` 对齐。
+
 ## 故障排查
 
 | 现象 | 原因 / 处理 |
 |---|---|
 | `Couldn't find a valid ICU package` | 缺 libicu → `apt install -y libicu74` |
-| `unable to find library -l:libunwind.a` | 包装脚本 `-L` 指到了 i386 目录 → 用 `.../lib/clang/18/lib/linux/aarch64` |
+| `unable to find library -l:libunwind.a` | 包装脚本 `-L` 指错了架构（写死 `clang/18` 随 NDK 升版失效，或 `find|head` 命中 i386/x86_64）→ 改用 `ls -d "$TC"/lib/clang/*/lib/linux/aarch64` |
 | `file /tmp/t.o` 显示 x86-64 | 用了 NDK 原始 clang → 重跑 `/root/setup-env.sh` 的第 4 步 |
 | `Extract: Permission denied ... nx_extract` | 游戏文件放在 `/sdcard`（noexec）→ 移到 `/root` |
 | `LinkedList is empty` / 4361 个文件被跳过 | 6.2 补丁 |

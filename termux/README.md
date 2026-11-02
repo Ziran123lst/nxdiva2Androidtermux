@@ -73,9 +73,11 @@ Android 外部存储是 `noexec`，工具会在游戏目录旁编译并执行 `n
 （sysroot、头文件、aarch64 stub 库）。所以把 `clang`/`clang++` 换成转发到 Termux clang 的
 包装脚本，NDK 只当数据用。
 
-包装脚本里的 `-L` 必须指向 **`.../lib/clang/18/lib/linux/aarch64`**。用
-`find ... | head -1` 找 libunwind 会先命中 `i386-unknown-linux-gnu`，链接时报
-`unable to find library -l:libunwind.a`。脚本里是显式指定并带存在性断言的。
+包装脚本里的 `-L` 必须指向 **aarch64 的那一份 `.../lib/clang/<ver>/lib/linux/aarch64`**，而不是写死
+`clang/18`，也不要用 `find ... | head -1` 去找。`find` 返回顺序里 `i386-unknown-linux-gnu`、
+`x86_64-unknown-linux-gnu` 都可能排在 `aarch64` 前面，取第一个会命中错架构，链接时报
+`unable to find library -l:libunwind.a`。脚本里按 `aarch64` 前缀 glob（不写死版本号），并对
+`libunwind.a` 与 `libclang_rt.builtins-aarch64-android.a` 两个库都做存在性断言。
 
 自检必须出现 `ARM aarch64`。
 
@@ -138,12 +140,16 @@ env.txt  settings.txt  nx2a-data.json  nintendo_ext.ttf
 > **上游一旦改了被替换的源码文本，`apply_patches.sh` 会断言失败并中止。** 这是刻意的：
 > 请人工核对新源码后再改锚点，**不要删掉断言改成盲替换**。
 
+> **pchtxt 偏移换算（本机实测结论，非推断）**：本作 `main` 的段文件偏移是 `0x101`，所以
+> **pchtxt 文件偏移 = 补丁偏移 + 0x101**（不是 +0x100）。用 +0x100 会在 `DT_INIT` 阶段 `SIGILL`。
+> 自己改补丁时务必按 `0x101` 对齐。
+
 ## 故障排查
 
 | 现象 | 原因 / 处理 |
 |---|---|
 | `Couldn't find a valid ICU package` | 缺 libicu → `apt install -y libicu74` |
-| `unable to find library -l:libunwind.a` | 包装脚本 `-L` 指到了 i386 目录 → 用 `.../lib/clang/18/lib/linux/aarch64` |
+| `unable to find library -l:libunwind.a` | 包装脚本 `-L` 指错了架构（写死 `clang/18` 随 NDK 升版失效，或 `find|head` 命中 i386/x86_64）→ 改用 `ls -d "$TC"/lib/clang/*/lib/linux/aarch64` |
 | `file /tmp/t.o` 显示 x86-64 | 用了 NDK 原始 clang → 重跑 `/root/setup-env.sh` 的第 4 步 |
 | `Extract: Permission denied ... nx_extract` | 游戏文件放在 `/sdcard`（noexec）→ 移到 `/root` |
 | `LinkedList is empty` / 4361 个文件被跳过 | 6.2 补丁 |

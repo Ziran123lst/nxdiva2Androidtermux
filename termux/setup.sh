@@ -52,9 +52,14 @@ set -euo pipefail
 
 P=/data/data/com.termux/files/usr            # Termux 的 clang 通过 nx.sh 的 bind 挂在这里
 TC=/root/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64
-# libunwind.a 必须取 aarch64 那份。不要用 find ... | head -1 去找：
-# 它会先命中 .../lib/linux/i386-unknown-linux-gnu，链接时报 unable to find library -l:libunwind.a
-LIB="$TC/lib/clang/18/lib/linux/aarch64"
+# aarch64 的 libunwind.a / libclang_rt.builtins 必须显式匹配 aarch64 目录，两点都不要踩：
+#   * 不要写死 clang 主版本号（NDK r28 起 18→19/20），否则目录不存在，链接报
+#     unable to find library -l:libunwind.a。
+#   * 不要用 find ... | head -1 去找：find 返回顺序里 i386-unknown-linux-gnu、
+#     x86_64-unknown-linux-gnu 都可能排在 aarch64 前面，取第一个会命中错架构。
+# 正确做法：按 aarch64 前缀 glob（不写死版本号），并对两个库做存在性断言。
+LIB=$(ls -d "$TC"/lib/clang/*/lib/linux/aarch64 2>/dev/null | tail -1)
+[ -n "$LIB" ] || die "在 $TC/lib/clang/*/lib/linux/ 下找不到 aarch64 目录"
 
 step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 info() { printf '  %s\n' "$*"; }
@@ -85,11 +90,10 @@ grep -q 'Pkg.Revision = 27.2.12479018' /root/android-ndk-r27c/source.properties 
     || die "NDK 版本不对：$(grep Pkg.Revision /root/android-ndk-r27c/source.properties)，必须是 27.2.12479018"
 
 step "4/4 编译器替换（关键一步）"
-[ -f "$LIB/libunwind.a" ] || {
-    echo "libunwind.a 不在 $LIB，实际有这些目录：" >&2
-    ls -1 "$TC"/lib/clang/*/lib/linux 2>/dev/null >&2 || true
-    die "找不到 aarch64 的 libunwind.a —— 请人工确认 NDK 的 clang 版本目录，不要退回 find | head -1"
-}
+# -L 指向 aarch64 这一份，同时解决 libunwind.a 与 libclang_rt.builtins。
+# 只 symlink libunwind.a 的话，下一步会报 builtins 缺失。
+[ -f "$LIB/libunwind.a" ] || die "找不到 $LIB/libunwind.a —— aarch64 的 libunwind.a 缺失"
+[ -f "$LIB/libclang_rt.builtins-aarch64-android.a" ] || die "找不到 $LIB/libclang_rt.builtins-aarch64-android.a —— aarch64 的 builtins 缺失"
 [ -e "$TC/bin/clang.real" ]   || mv "$TC/bin/clang"   "$TC/bin/clang.real"
 [ -e "$TC/bin/clang++.real" ] || mv "$TC/bin/clang++" "$TC/bin/clang++.real"
 printf '#!/bin/sh\nexec %s/bin/clang --sysroot=%s/sysroot -L%s "$@"\n'  "$P" "$TC" "$LIB" > "$TC/bin/clang"
