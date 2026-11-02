@@ -837,9 +837,29 @@ static void on_queue_destroyed(ANativeActivity *a, AInputQueue *q) { (void)a; AI
 
 // ---- the host ----
 int main(int argc, char **argv);   // dm/host/main.c
+static int copy_mods_from_assets(const char *dst) {
+    AAssetManager *am = dm_front_assets(); if (!am) return 0;
+    AAssetDir *dir = AAssetManager_openDir(am, "mods"); if (!dir) return 0;
+    mkdir(dst, 0700);
+    const char *name; int n = 0;
+    while ((name = AAssetDir_getNextFileName(dir))) {
+        char an[600], p[700];
+        snprintf(an, sizeof an, "mods/%s", name);
+        AAsset *a = AAssetManager_open(am, an, AASSET_MODE_BUFFER);
+        if (!a) continue;
+        snprintf(p, sizeof p, "%s/%s", dst, name);
+        FILE *f = fopen(p, "wb");
+        if (f) { char buf[65536]; int k; while ((k = AAsset_read(a, buf, sizeof buf)) > 0) fwrite(buf, 1, (size_t)k, f); fclose(f); n++; }
+        AAsset_close(a);
+    }
+    AAssetDir_close(dir);
+    LOG("[mods] %d files copied from the APK assets to %s", n, dst);
+    return n;
+}
 static void *host_thread(void *a) {
     (void)a;
-    char mods[600]; snprintf(mods, sizeof mods, "%s/mods", g_root);
+    char mods[600]; snprintf(mods, sizeof mods, "%s/mods-internal", g_act->internalDataPath);
+    if (copy_mods_from_assets(mods) <= 0) snprintf(mods, sizeof mods, "%s/mods", g_root);
     char *argv[] = {"dmhost", mods, NULL};
     atomic_store(&g_running, 1);
     int rc = main(2, argv);

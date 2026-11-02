@@ -34,6 +34,12 @@ static class P {
         var basePkg = OpenNsp(ks, a[1]); var updPkg = a[2] == "-" ? null : OpenNsp(ks, a[2]);
         Nca baseProg = Pick(basePkg, NcaContentType.Program) ?? throw new Exception("no Program NCA in the base NSP");
         Nca updProg = updPkg == null ? null : Pick(updPkg, NcaContentType.Program, baseProg.Header.TitleId) ?? throw new Exception("no Program NCA of the base game's program in the update NSP");
+        // 同一个 XCI 里的第二个 Program NCA 当作 update
+        if (updProg == null)
+        {
+            var more = basePkg.FindAll(n => n.Header.ContentType == NcaContentType.Program && n.Header.TitleId == baseProg.Header.TitleId && !ReferenceEquals(n, baseProg));
+            if (more.Count > 0) { updProg = more[more.Count - 1]; Console.WriteLine("[nca] a second Program NCA in the same image: treated as the update"); }
+        }
         Nca ctrl = Pick(updPkg ?? basePkg, NcaContentType.Control, baseProg.Header.TitleId);
         Console.WriteLine($"title {baseProg.Header.TitleId:x16}" + (updProg != null ? $", update {updProg.Header.TitleId:x16}" : ""));
         string outDir = a[3], cmpDir = a.Length > 4 ? a[4] : null;
@@ -186,6 +192,21 @@ static class P {
                 using var lf = new UniqueRef<IFile>();
                 g_lenientFs.OpenFile(ref lf.Ref, e.FullPath.ToU8Span(), OpenMode.Read).ThrowIfFailure();
                 Write(lf.Get, op, e.Size, buf);
+            }
+            catch (Exception x) when (x is InvalidOperationException || x is IOException)
+            {
+                try {
+                    if (g_lenient != null) {
+                        g_lenientFs ??= g_lenient();
+                        using var lf = new UniqueRef<IFile>();
+                        g_lenientFs.OpenFile(ref lf.Ref, e.FullPath.ToU8Span(), OpenMode.Read).ThrowIfFailure();
+                        Write(lf.Get, op, e.Size, buf);
+                        continue;
+                    }
+                } catch (Exception y) { Console.WriteLine("[RED] lenient read failed, skipped: " + e.FullPath + " (" + y.Message + ")"); }
+                Console.WriteLine("[RED] read failed, skipped: " + e.FullPath + " (" + x.Message + ")");
+                if (File.Exists(op)) File.Delete(op);
+                continue;
             }
             written += e.Size;
         }

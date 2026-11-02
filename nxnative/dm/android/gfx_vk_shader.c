@@ -2,9 +2,11 @@
 // The bundle (dm/android/tools/shader_vk.py) is mapped read-only: entries sorted by key, each the SPIR-V of one Switch shader and its binary reflection.
 // The translator numbers every stage's bindings from 0 in set 0; at module creation each stage's bindings move to a set of its own (vertex 0, fragment 1,
 // geometry 2, tessellation 3 / 4; compute 0) by rewriting the DescriptorSet decorations, so a program's stages never collide.
+#include <android/asset_manager.h>
 #include "gfx_vk.h"
 #include "nvn_hmap.h"
 #include <CommonCrypto/CommonDigest.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -13,9 +15,21 @@
 
 typedef struct __attribute__((packed)) { uint64_t key; uint32_t stage, spv_off, spv_len, refl_off, refl_len, pad; } bent;
 static const uint8_t *g_bundle; static uint32_t g_nent; static const bent *g_ent;
+AAssetManager *dm_front_assets(void);
+static int bundle_from_assets(const char *why) {
+    AAssetManager *am = dm_front_assets(); if (!am) return 0;
+    AAsset *a = AAssetManager_open(am, "shaders.dmsv", AASSET_MODE_BUFFER); if (!a) return 0;
+    off_t n = AAsset_getLength(a); uint8_t *p = malloc((size_t)n);
+    if (!p || AAsset_read(a, p, (size_t)n) != n) { free(p); AAsset_close(a); return 0; }
+    AAsset_close(a);
+    if (memcmp(p, "DMSV", 4)) { VKLOG("[RED] the APK's shaders.dmsv is not a shader bundle"); free(p); return 0; }
+    g_bundle = p; memcpy(&g_nent, g_bundle + 8, 4); g_ent = (const bent *)(g_bundle + 12);
+    VKLOG("shader bundle from the APK assets (%s): %u shaders, %.1f MB", why, g_nent, n / 1048576.0);
+    return 1;
+}
 void vk_shaders_open(const char *path) {
     int fd = open(path, O_RDONLY | O_CLOEXEC); struct stat st;
-    if (fd < 0 || fstat(fd, &st)) { VKLOG("[RED] no shader bundle at %s: nothing will be drawn", path); if (fd >= 0) close(fd); return; }
+    if (fd < 0 || fstat(fd, &st)) { VKLOG("[RED] no shader bundle at %s (errno=%d %s), trying the APK's assets", path, errno, strerror(errno)); if (fd >= 0) close(fd); bundle_from_assets("the file was not readable"); return; }
     g_bundle = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_SHARED, fd, 0); close(fd);
     if (g_bundle == MAP_FAILED || memcmp(g_bundle, "DMSV", 4)) { VKLOG("[RED] %s is not a shader bundle", path); g_bundle = NULL; return; }
     memcpy(&g_nent, g_bundle + 8, 4); g_ent = (const bent *)(g_bundle + 12);

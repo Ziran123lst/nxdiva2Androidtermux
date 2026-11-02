@@ -50,7 +50,18 @@ typedef struct {
 static aout *g_aos[AOMAX];
 static pthread_mutex_t g_aos_lock = PTHREAD_MUTEX_INITIALIZER;
 static int g_suspended;
-static aout *ao(const void *g) { aout *a = objmap_get(g); if (!a) die("AudioOut %p was not created by the host", g); return a; }
+static Result au_open_at(void *g, void *ev, const char *name, const uint8_t *param, void *lr);
+static aout *ao(const void *g) {
+    aout *a = objmap_get(g);
+    if (!a) {
+        static const uint8_t def[8] = {0,0,0,0,2,0,0,0};
+        LOG("[RED] audio: AudioOut %p was made by the game itself; opening a host output for it", g);
+        au_open_at((void *)g, NULL, "game-made", def, NULL);
+        a = objmap_get(g);
+        if (!a) die("AudioOut %p could not be created", g);
+    }
+    return a;
+}
 // the call site as "module+offset"; "host" when the host itself calls (in-process audio renderer)
 static const char *site(void *lr, char *buf, size_t n) {
     module_t *m = lr ? module_of(lr) : NULL;
