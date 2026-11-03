@@ -236,6 +236,8 @@ info "clang: $("$HOME/nx.sh" "$PREFIX/bin/clang" --version | head -1)"
 step "5/5 把仓库与 setup-env.sh 放进 Ubuntu"
 rm -rf "$ROOTFS/root/nxdiva2Androidtermux"
 cp -a "$REPO" "$ROOTFS/root/nxdiva2Androidtermux"
+info "已复制 $REPO -> $ROOTFS/root/nxdiva2Androidtermux"
+info "以后改了 Termux 侧仓库，跑 bash termux/sync.sh 重新同步（不用重跑整个 setup.sh）"
 
 cat > "$ROOTFS/root/setup-env.sh" <<'EOS_ENV'
 #!/bin/bash
@@ -317,6 +319,9 @@ chmod +x "$ROOTFS/root/setup-env.sh"
 
 printf '\n\033[1mTermux 侧就绪。\033[0m 下一步：\n'
 printf '  ~/nx.sh bash /root/setup-env.sh\n'
+printf '\n\033[1m改动同步：\033[0m 在 Termux 里 git pull 或改完代码后，执行\n'
+printf '  bash termux/sync.sh\n'
+printf '即可把仓库重新同步进 Ubuntu（setup.sh 是 cp -a 复制，不会自动同步）。\n'
 EOS_SETUP
 
 cat > termux/build.sh <<'EOS_BUILD'
@@ -354,8 +359,9 @@ case "$TID" in
 esac
 
 # STEM 优先从数据包目录推，避免第二次运行误选 -termux.apk（那样 STEM 变 X-termux、
-# DATA 不存在、mods 一个都不内包，且输出名会变成 X-termux-termux.apk）
-DATA="$(ls -d "$ROM"/*-data 2>/dev/null | head -1 || true)"
+# DATA 不存在、mods 一个都不内包，且输出名会变成 X-termux-termux.apk）。
+# 多个 *-data 时取 mtime 最新的那个（-t 按 mtime 降序，-d 只列目录本身）。
+DATA="$(ls -t -d "$ROM"/*-data 2>/dev/null | head -1 || true)"
 if [ -n "$DATA" ]; then
     STEM="$(basename "$DATA" -data)"
 else
@@ -412,6 +418,40 @@ printf '  mods  %d 个内包\n' "${#ARGS[@]}"
 printf '  数据包 %s（用 MT 或 adb push 送进 Android/data/<包名>/files/）\n' "$DATA"
 EOS_BUILD
 
+cat > termux/sync.sh <<'EOS_SYNC'
+#!/data/data/com.termux/files/usr/bin/bash
+# 把 Termux 侧的仓库重新同步进 proot 的 Ubuntu。
+# setup.sh 是 cp -a 复制（不是 bind 挂载），所以在 Termux 里 git pull 或改完代码后，
+# 必须跑一次本脚本，rootfs 里那份才会更新。
+# 用法（Termux 里，仓库根目录）：  bash termux/sync.sh
+set -euo pipefail
+
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+PREFIX="/data/data/com.termux/files/usr"
+ROOTFS="$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu"
+
+step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
+info() { printf '  %s\n' "$*"; }
+die()  { printf '\033[31m[FAIL]\033[0m %s\n' "$*" >&2; exit 1; }
+
+[ -d "$PREFIX" ] || die "这个脚本要在 Termux 里跑（找不到 $PREFIX）"
+[ -d "$ROOTFS" ] || die "Ubuntu 没装上：找不到 $ROOTFS（先跑 bash termux/setup.sh）"
+
+step "1/2 同步仓库"
+rm -rf "$ROOTFS/root/nxdiva2Androidtermux"
+cp -a "$REPO" "$ROOTFS/root/nxdiva2Androidtermux"
+info "$REPO -> $ROOTFS/root/nxdiva2Androidtermux"
+
+step "2/2 报告 rootfs 里的版本"
+if [ -d "$ROOTFS/root/nxdiva2Androidtermux/.git" ]; then
+    git -C "$ROOTFS/root/nxdiva2Androidtermux" log --oneline -1 || true
+else
+    info "（没有 .git，可能是源码包而非 clone）"
+fi
+printf '\n\033[1m同步完成。\033[0m 在 Ubuntu 里继续：\n'
+printf '  ~/nx.sh bash -c "cd /root/nxdiva2Androidtermux && bash termux/build.sh ..."\n'
+EOS_SYNC
+
 cat > termux/README.md <<'EOS_README'
 # 在安卓手机（Termux）上跑通 nx2android
 
@@ -423,6 +463,40 @@ cat > termux/README.md <<'EOS_README'
 - 骁龙（Adreno，需支持 BC 纹理）、Android 12+、剩余空间 ≥ 40 GB
 - F-Droid 版 Termux（应用商店版已废弃）：`https://f-droid.org/packages/com.termux/`
 - 用户自己的 `prod.keys` 与游戏 dump。**仓库里没有任何密钥和游戏文件。**
+
+---
+
+## 第 0 步：确认 remote 指向（别把补丁推回上游）
+
+本仓库是 **fork**：`Ziran123lst/nxdiva2Androidtermux`；上游是 `shirai91/nx2android`。
+**补丁只存在于你的 fork**，上游没有。
+
+```sh
+cd ~/nxdiva2Androidtermux && git remote -v
+```
+
+| `origin` 指向 | 含义 | 怎么办 |
+|---|---|---|
+| `Ziran123lst/nxdiva2Androidtermux` | 你的 fork ✅ | 直接 `git pull --ff-only` |
+| `shirai91/nx2android` | 上游原作者 ❌ | 改指自己的 fork（见下） |
+
+```sh
+# origin 指错上游时：否则 git push origin 会推向原作者的仓库，必然被拒
+git remote set-url origin https://github.com/Ziran123lst/nxdiva2Androidtermux.git
+git fetch origin && git reset --hard origin/main   # 本地有改动先 git stash
+```
+
+拉完自检：
+
+```sh
+git log --oneline -1                      # 应是 54eb897 或更新
+grep -c profile-derived termux/build.sh   # 应为 1（5 处 bug 修复之一）
+```
+
+> `git status -sb` 显示 `ahead 3` 是**正常**的：那 3 个提交（7 补丁 / 3 修正 / 5 修复）
+> 本来就只该在你的 fork 里，相对上游 ahead 才对。要看的不是 `ahead`，而是**服务端
+> `main` 的 SHA 是否等于你本地的 HEAD**。分支列表里那些 `chore/*` 是从上游继承来的，
+> 不是新推送。
 
 ---
 
@@ -442,6 +516,21 @@ bash termux/build.sh "/root/rom" -k "/root/rom/prod.keys" --experimental
 
 产物：`/root/rom/<游戏名>-termux.apk`（**19 MB 以上**，含 shader 与 mods）和
 `/root/rom/<游戏名>-data/`（数据包，约 14 GB）。
+
+### 本机实测记录
+
+这套配置在设备上**已经跑出产物**，不是推测：
+
+```
+[6/8] host (0:30): 1.4 MB          ← libdmhost.so 编出来并链接成功
+[7/8] APK: ProjectDivaMEGA39s.apk, 1.7 MB
+APK 19~20 MB（内包 shader 后）
+mods embedded: 31 / 62
+```
+
+判据：`libdmhost.so` 1.4 MB 且链接成功 → APK 含 shader 后 19~20 MB → mods 内包 31/62。
+「保留断言」「不用 `find|head`」这两个约束就是照着这次成功的构建定下来的，
+属于**已实测验证的构建前提**，不是通用设计约定。
 
 ---
 
@@ -472,6 +561,17 @@ Android 外部存储是 `noexec`，工具会在游戏目录旁编译并执行 `n
 | 写 `~/nx.sh` | 带两个 bind，`--bind /data/data/com.termux/files/usr:...` 是编译器替换的关键 |
 | 复制仓库到 `/root/nxdiva2Androidtermux` | 后续两步都在 Ubuntu 里跑 |
 | 生成 `/root/setup-env.sh` | 第 2 步的脚本 |
+
+> **仓库是复制进去的，不是挂载的。** `setup.sh` 用 `cp -a` 把仓库拷进 rootfs，
+> 之后你在 Termux 侧 `git pull` 或改文件，rootfs 里那份**不会自动更新**。
+> 改完代码后执行：
+>
+> ```sh
+> bash termux/sync.sh      # 只重新同步仓库，不重跑 pkg / apt / .NET / NDK
+> ```
+>
+> 没改成 `--bind` 挂载的原因：proot 里以 root 身份写出的文件，回到 Termux 侧属主会变成 root，
+> Termux 里的 git 会报 `detected dubious ownership`。`cp -a` + `sync.sh` 没有这个问题。
 
 ### 第 2 步 `/root/setup-env.sh`
 
@@ -504,8 +604,9 @@ Android 外部存储是 `noexec`，工具会在游戏目录旁编译并执行 `n
 | `build.py --game <TitleID> --release --lib` | 改了 C 就必须重编，否则 APK 里还是旧逻辑 |
 | `mkapk.py --asset shaders.dmsv=... --asset mods/<name>=...` | shader 与 mods 内包进 APK |
 
-`build.sh` 结束时会断言：APK ≥ 19 MB、且 `assets/shaders.dmsv` 在包里。
-带 mods 会更大（mods 里的 `.patched.bin` 很大，可到 70~80 MB）。
+`build.sh` 结束时会断言：`assets/shaders.dmsv` 在包里，且 **APK 不小于 shader 包**
+（`MB >= SH_MB - 1`）。判据**不写死 19 MB** —— 那是这台机器的经验值，shader 少的游戏
+只有几 MB，写死会误杀。带 mods 会更大（mods 里的 `.patched.bin` 很大，可到 70~80 MB）。
 
 porter 阶段的正常表现（判读 `/root/port.log`）：
 
@@ -564,6 +665,9 @@ env.txt  settings.txt  nx2a-data.json  nintendo_ext.ttf
 | 现象 | 原因 / 处理 |
 |---|---|
 | `Couldn't find a valid ICU package` | 缺 libicu → `apt install -y libicu74` |
+| `git push origin` 被拒 / 推到上游去了 | `origin` 指到了 `shirai91/nx2android` → 见「第 0 步」，改指自己的 fork |
+| rootfs 里的代码是旧的 | `setup.sh` 是复制不是挂载 → Termux 里跑 `bash termux/sync.sh` |
+| 第二次跑 build.sh，mods 一个都没内包 | 已修：`STEM` 现在从 `*-data` 目录推，不再误选 `-termux.apk` |
 | `unable to find library -l:libunwind.a` | 包装脚本 `-L` 指错了架构（写死 `clang/18` 随 NDK 升版失效，或 `find|head` 命中 i386/x86_64）→ 改用 `ls -d "$TC"/lib/clang/*/lib/linux/aarch64` |
 | `file /tmp/t.o` 显示 x86-64 | 用了 NDK 原始 clang → 重跑 `/root/setup-env.sh` 的第 4 步 |
 | `Extract: Permission denied ... nx_extract` | 游戏文件放在 `/sdcard`（noexec）→ 移到 `/root` |
@@ -577,8 +681,8 @@ env.txt  settings.txt  nx2a-data.json  nintendo_ext.ttf
 | 黑屏有声音 | 检查日志里 `shader bundle from the APK assets` |
 EOS_README
 
-chmod +x termux/setup.sh termux/build.sh
-say "已写出：termux/setup.sh  termux/build.sh  termux/README.md"
+chmod +x termux/setup.sh termux/build.sh termux/sync.sh
+say "已写出：termux/setup.sh  termux/build.sh  termux/sync.sh  termux/README.md"
 
 if git rev-parse --git-dir >/dev/null 2>&1; then
     git add -A

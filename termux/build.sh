@@ -32,8 +32,9 @@ case "$TID" in
 esac
 
 # STEM 优先从数据包目录推，避免第二次运行误选 -termux.apk（那样 STEM 变 X-termux、
-# DATA 不存在、mods 一个都不内包，且输出名会变成 X-termux-termux.apk）
-DATA="$(ls -d "$ROM"/*-data 2>/dev/null | head -1 || true)"
+# DATA 不存在、mods 一个都不内包，且输出名会变成 X-termux-termux.apk）。
+# 多个 *-data 时取 mtime 最新的那个（-t 按 mtime 降序，-d 只列目录本身）。
+DATA="$(ls -t -d "$ROM"/*-data 2>/dev/null | head -1 || true)"
 if [ -n "$DATA" ]; then
     STEM="$(basename "$DATA" -data)"
 else

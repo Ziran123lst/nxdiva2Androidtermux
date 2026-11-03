@@ -43,6 +43,8 @@ info "clang: $("$HOME/nx.sh" "$PREFIX/bin/clang" --version | head -1)"
 step "5/5 把仓库与 setup-env.sh 放进 Ubuntu"
 rm -rf "$ROOTFS/root/nxdiva2Androidtermux"
 cp -a "$REPO" "$ROOTFS/root/nxdiva2Androidtermux"
+info "已复制 $REPO -> $ROOTFS/root/nxdiva2Androidtermux"
+info "以后改了 Termux 侧仓库，跑 bash termux/sync.sh 重新同步（不用重跑整个 setup.sh）"
 
 cat > "$ROOTFS/root/setup-env.sh" <<'EOS_ENV'
 #!/bin/bash
@@ -124,3 +126,6 @@ chmod +x "$ROOTFS/root/setup-env.sh"
 
 printf '\n\033[1mTermux 侧就绪。\033[0m 下一步：\n'
 printf '  ~/nx.sh bash /root/setup-env.sh\n'
+printf '\n\033[1m改动同步：\033[0m 在 Termux 里 git pull 或改完代码后，执行\n'
+printf '  bash termux/sync.sh\n'
+printf '即可把仓库重新同步进 Ubuntu（setup.sh 是 cp -a 复制，不会自动同步）。\n'

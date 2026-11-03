@@ -11,6 +11,40 @@
 
 ---
 
+## 第 0 步：确认 remote 指向（别把补丁推回上游）
+
+本仓库是 **fork**：`Ziran123lst/nxdiva2Androidtermux`；上游是 `shirai91/nx2android`。
+**补丁只存在于你的 fork**，上游没有。
+
+```sh
+cd ~/nxdiva2Androidtermux && git remote -v
+```
+
+| `origin` 指向 | 含义 | 怎么办 |
+|---|---|---|
+| `Ziran123lst/nxdiva2Androidtermux` | 你的 fork ✅ | 直接 `git pull --ff-only` |
+| `shirai91/nx2android` | 上游原作者 ❌ | 改指自己的 fork（见下） |
+
+```sh
+# origin 指错上游时：否则 git push origin 会推向原作者的仓库，必然被拒
+git remote set-url origin https://github.com/Ziran123lst/nxdiva2Androidtermux.git
+git fetch origin && git reset --hard origin/main   # 本地有改动先 git stash
+```
+
+拉完自检：
+
+```sh
+git log --oneline -1                      # 应是 54eb897 或更新
+grep -c profile-derived termux/build.sh   # 应为 1（5 处 bug 修复之一）
+```
+
+> `git status -sb` 显示 `ahead 3` 是**正常**的：那 3 个提交（7 补丁 / 3 修正 / 5 修复）
+> 本来就只该在你的 fork 里，相对上游 ahead 才对。要看的不是 `ahead`，而是**服务端
+> `main` 的 SHA 是否等于你本地的 HEAD**。分支列表里那些 `chore/*` 是从上游继承来的，
+> 不是新推送。
+
+---
+
 ## 三步走
 
 ```sh
@@ -27,6 +61,21 @@ bash termux/build.sh "/root/rom" -k "/root/rom/prod.keys" --experimental
 
 产物：`/root/rom/<游戏名>-termux.apk`（**19 MB 以上**，含 shader 与 mods）和
 `/root/rom/<游戏名>-data/`（数据包，约 14 GB）。
+
+### 本机实测记录
+
+这套配置在设备上**已经跑出产物**，不是推测：
+
+```
+[6/8] host (0:30): 1.4 MB          ← libdmhost.so 编出来并链接成功
+[7/8] APK: ProjectDivaMEGA39s.apk, 1.7 MB
+APK 19~20 MB（内包 shader 后）
+mods embedded: 31 / 62
+```
+
+判据：`libdmhost.so` 1.4 MB 且链接成功 → APK 含 shader 后 19~20 MB → mods 内包 31/62。
+「保留断言」「不用 `find|head`」这两个约束就是照着这次成功的构建定下来的，
+属于**已实测验证的构建前提**，不是通用设计约定。
 
 ---
 
@@ -57,6 +106,17 @@ Android 外部存储是 `noexec`，工具会在游戏目录旁编译并执行 `n
 | 写 `~/nx.sh` | 带两个 bind，`--bind /data/data/com.termux/files/usr:...` 是编译器替换的关键 |
 | 复制仓库到 `/root/nxdiva2Androidtermux` | 后续两步都在 Ubuntu 里跑 |
 | 生成 `/root/setup-env.sh` | 第 2 步的脚本 |
+
+> **仓库是复制进去的，不是挂载的。** `setup.sh` 用 `cp -a` 把仓库拷进 rootfs，
+> 之后你在 Termux 侧 `git pull` 或改文件，rootfs 里那份**不会自动更新**。
+> 改完代码后执行：
+>
+> ```sh
+> bash termux/sync.sh      # 只重新同步仓库，不重跑 pkg / apt / .NET / NDK
+> ```
+>
+> 没改成 `--bind` 挂载的原因：proot 里以 root 身份写出的文件，回到 Termux 侧属主会变成 root，
+> Termux 里的 git 会报 `detected dubious ownership`。`cp -a` + `sync.sh` 没有这个问题。
 
 ### 第 2 步 `/root/setup-env.sh`
 
@@ -89,8 +149,9 @@ Android 外部存储是 `noexec`，工具会在游戏目录旁编译并执行 `n
 | `build.py --game <TitleID> --release --lib` | 改了 C 就必须重编，否则 APK 里还是旧逻辑 |
 | `mkapk.py --asset shaders.dmsv=... --asset mods/<name>=...` | shader 与 mods 内包进 APK |
 
-`build.sh` 结束时会断言：APK ≥ 19 MB、且 `assets/shaders.dmsv` 在包里。
-带 mods 会更大（mods 里的 `.patched.bin` 很大，可到 70~80 MB）。
+`build.sh` 结束时会断言：`assets/shaders.dmsv` 在包里，且 **APK 不小于 shader 包**
+（`MB >= SH_MB - 1`）。判据**不写死 19 MB** —— 那是这台机器的经验值，shader 少的游戏
+只有几 MB，写死会误杀。带 mods 会更大（mods 里的 `.patched.bin` 很大，可到 70~80 MB）。
 
 porter 阶段的正常表现（判读 `/root/port.log`）：
 
@@ -149,6 +210,9 @@ env.txt  settings.txt  nx2a-data.json  nintendo_ext.ttf
 | 现象 | 原因 / 处理 |
 |---|---|
 | `Couldn't find a valid ICU package` | 缺 libicu → `apt install -y libicu74` |
+| `git push origin` 被拒 / 推到上游去了 | `origin` 指到了 `shirai91/nx2android` → 见「第 0 步」，改指自己的 fork |
+| rootfs 里的代码是旧的 | `setup.sh` 是复制不是挂载 → Termux 里跑 `bash termux/sync.sh` |
+| 第二次跑 build.sh，mods 一个都没内包 | 已修：`STEM` 现在从 `*-data` 目录推，不再误选 `-termux.apk` |
 | `unable to find library -l:libunwind.a` | 包装脚本 `-L` 指错了架构（写死 `clang/18` 随 NDK 升版失效，或 `find|head` 命中 i386/x86_64）→ 改用 `ls -d "$TC"/lib/clang/*/lib/linux/aarch64` |
 | `file /tmp/t.o` 显示 x86-64 | 用了 NDK 原始 clang → 重跑 `/root/setup-env.sh` 的第 4 步 |
 | `Extract: Permission denied ... nx_extract` | 游戏文件放在 `/sdcard`（noexec）→ 移到 `/root` |
