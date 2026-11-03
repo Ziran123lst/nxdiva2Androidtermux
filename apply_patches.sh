@@ -194,134 +194,11 @@ mkdir -p termux
 # 原因：重跑本脚本会把外部对它的修改覆盖掉，已踩过一次。它必须已随仓库提交。
 [ -f termux/setup.sh ] || die "termux/setup.sh 缺失：它现在是手维护文件，请确保已随仓库提交"
 
-cat > termux/build.sh <<'EOS_BUILD'
-#!/bin/bash
-# 阶段 7-8（指南第 8-9 节）：porter port → 重编宿主 → mkapk 内包 shader 与 mods。
-# 在 Ubuntu 的仓库目录里执行：
-#   cd /root/nxdiva2Androidtermux
-#   bash termux/build.sh "/root/rom" -k "/root/rom/prod.keys" --experimental
-# 第一个不以 - 开头的参数是游戏目录，其余参数原样交给 porter port。
-set -euo pipefail
-
-REPO="$(cd "$(dirname "$0")/.." && pwd)"
-source /root/nx-env.sh
-cd "$REPO"
-
-step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
-info() { printf '  %s\n' "$*"; }
-die()  { printf '\033[31m[FAIL]\033[0m %s\n' "$*" >&2; exit 1; }
-
-ROM=""
-for a in "$@"; do case "$a" in -*) ;; *) [ -z "$ROM" ] && ROM="$a" ;; esac; done
-[ -n "$ROM" ] || die '用法: bash termux/build.sh <游戏目录> [-k prod.keys] [--experimental]'
-[ -d "$ROM" ] || die "游戏目录不存在：$ROM"
-
-step "1/3 porter port"
-python3 -m porter port "$@" 2>&1 | tee /root/port.log
-grep -q '\[8/8\]' /root/port.log || info "日志里没有 [8/8]，请翻 /root/port.log 确认打包是否完整"
-
-BUILD="$(ls -dt "$ROM"/*_build 2>/dev/null | head -1 || true)"
-[ -n "$BUILD" ] || die "没找到 <游戏目录>/<TitleID>_build —— porter 没跑完？看 /root/port.log"
-TID="$(basename "$BUILD" _build)"
-case "$TID" in
-    [0-9a-fA-F]*) info "title ID $TID" ;;
-    *) die "从 $BUILD 推不出 title ID（得到 $TID）" ;;
-esac
-
-# STEM 优先从数据包目录推，避免第二次运行误选 -termux.apk（那样 STEM 变 X-termux、
-# DATA 不存在、mods 一个都不内包，且输出名会变成 X-termux-termux.apk）。
-# 多个 *-data 时取 mtime 最新的那个（-t 按 mtime 降序，-d 只列目录本身）。
-DATA="$(ls -t -d "$ROM"/*-data 2>/dev/null | head -1 || true)"
-if [ -n "$DATA" ]; then
-    STEM="$(basename "$DATA" -data)"
-else
-    APK0="$(ls -t "$ROM"/*.apk 2>/dev/null | grep -v -- '-termux\.apk$' | head -1 || true)"
-    [ -n "$APK0" ] || die "porter 没产出 APK，也没生成 *-data 目录"
-    STEM="$(basename "$APK0" .apk)"
-    DATA="$ROM/$STEM-data"
-fi
-[ -d "$DATA" ] || die "数据包目录不存在：$DATA"
-SHADERS="$BUILD/android/shaders.dmsv"
-[ -f "$SHADERS" ] || die "没有 shader 包 $SHADERS（[4/8]/[5/8] 阶段失败？）"
-
-step "2/3 重编宿主（改了 C 必须重编，否则 APK 里还是旧逻辑）"
-# 版本未注册时 porter 会把 profile 放到 profile-derived/，两种都要试
-if [ -d "$BUILD/profile/$TID" ]; then
-    export DM_GAMES_DIR="$BUILD/profile"
-elif [ -d "$BUILD/profile-derived/$TID" ]; then
-    export DM_GAMES_DIR="$BUILD/profile-derived"
-else
-    die "找不到 $TID 的 profile（profile/ 与 profile-derived/ 都没有）"
-fi
-export ANDROID_NDK_HOME=/root/android-ndk-r27c
-python3 nxnative/dm/android/build.py --game "$TID" --release --lib
-SO="$REPO/nxnative/dm/android/out/$TID-release/libdmhost.so"
-[ -f "$SO" ] || die "build.py 没产出 $SO"
-strings "$SO" | grep -q 'copied from the APK assets' \
-    || die "宿主库里没有 6.5 的日志串 —— mods 内包补丁没进这个库"
-info "$SO ($(stat -c %s "$SO") bytes)"
-
-step "3/3 mkapk 重打 APK（内包 shader 与 mods）"
-ARGS=()
-if [ -d "$DATA/mods" ]; then
-    for f in "$DATA"/mods/*; do
-        [ -f "$f" ] && ARGS+=(--asset "mods/$(basename "$f")=$f")
-    done
-fi
-OUT="$ROM/$STEM-termux.apk"
-python3 nxnative/dm/android/apk/mkapk.py \
-    "$SO" "$OUT" /root/.config/nx2android/signing-key.json \
-    --package "org.nx2a.t${TID,,}" --label "$STEM" --lib dmhost \
-    --version-code "${NX_VERCODE:-1000040}" --version-name "${NX_VERNAME:-1.0.9}" \
-    --landscape --release \
-    --asset "shaders.dmsv=$SHADERS" \
-    "${ARGS[@]}"
-
-unzip -l "$OUT" | grep -q 'assets/shaders.dmsv' || die "APK 里没有 assets/shaders.dmsv"
-SH_MB=$(( $(stat -c %s "$SHADERS") / 1048576 ))
-MB=$(( $(stat -c %s "$OUT") / 1048576 ))
-[ "$MB" -ge $(( SH_MB - 1 )) ] || die "APK ${MB} MB 小于 shader 包 ${SH_MB} MB —— shader 没打进去"
-
-printf '\n\033[1m完成。\033[0m\n'
-printf '  APK   %s (%s MB)\n' "$OUT" "$MB"
-printf '  mods  %d 个内包\n' "${#ARGS[@]}"
-printf '  数据包 %s（用 MT 或 adb push 送进 Android/data/<包名>/files/）\n' "$DATA"
-EOS_BUILD
-
-cat > termux/sync.sh <<'EOS_SYNC'
-#!/data/data/com.termux/files/usr/bin/bash
-# 把 Termux 侧的仓库重新同步进 proot 的 Ubuntu。
-# setup.sh 是 cp -a 复制（不是 bind 挂载），所以在 Termux 里 git pull 或改完代码后，
-# 必须跑一次本脚本，rootfs 里那份才会更新。
-# 用法（Termux 里，仓库根目录）：  bash termux/sync.sh
-set -euo pipefail
-
-REPO="$(cd "$(dirname "$0")/.." && pwd)"
-PREFIX="/data/data/com.termux/files/usr"
-ROOTFS="$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu"
-
-step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
-info() { printf '  %s\n' "$*"; }
-die()  { printf '\033[31m[FAIL]\033[0m %s\n' "$*" >&2; exit 1; }
-
-[ -d "$PREFIX" ] || die "这个脚本要在 Termux 里跑（找不到 $PREFIX）"
-[ -d "$ROOTFS" ] || die "Ubuntu 没装上：找不到 $ROOTFS（先跑 bash termux/setup.sh）"
-
-step "1/2 同步仓库"
-rm -rf "$ROOTFS/root/nxdiva2Androidtermux"
-cp -a "$REPO" "$ROOTFS/root/nxdiva2Androidtermux"
-info "$REPO -> $ROOTFS/root/nxdiva2Androidtermux"
-
-step "2/2 报告 rootfs 里的版本"
-if [ -d "$ROOTFS/root/nxdiva2Androidtermux/.git" ]; then
-    git -C "$ROOTFS/root/nxdiva2Androidtermux" log --oneline -1 || true
-else
-    info "（没有 .git，可能是源码包而非 clone）"
-fi
-printf '\n\033[1m同步完成。\033[0m 在 Ubuntu 里继续：\n'
-printf '  ~/nx.sh bash -c "cd /root/nxdiva2Androidtermux && bash termux/build.sh ..."\n'
-EOS_SYNC
-
+# termux/build.sh 与 termux/sync.sh 现在也是"手维护"文件（同 setup.sh 的理由）：
+# 重跑本脚本会覆盖外部修改，已经踩过一次。它们必须已随仓库提交。
+for f in termux/setup.sh termux/build.sh termux/sync.sh; do
+    [ -f "$f" ] || die "termux/$f 缺失：它是手维护文件，请确保已随仓库提交"
+done
 cat > termux/START-HERE.md <<'EOS_START'
 # 从零开始：在手机上把 Switch 游戏跑成 APK
 
@@ -457,7 +334,7 @@ bash termux/setup.sh
 
 1. 更新 Termux 并装 `proot-distro clang lld llvm binutils git curl shaderc`
 2. 申请存储权限
-3. 装 Ubuntu 24.04（proot 里的 rootfs）
+3. 装 Ubuntu（版本由 proot-distro 决定，本机实测为 26.04）
 4. 写 `~/nx.sh`（进 Ubuntu 的启动脚本）
 5. 把仓库复制进 Ubuntu 的 `/root/nxdiva2Androidtermux`
 
@@ -517,7 +394,7 @@ Ubuntu 里 `/root` 是 ext4，能执行。
 
 | 步骤 | 内容 |
 |---|---|
-| 1/4 | `apt` 装 python3/pip/git/adb/`libicu74` 等；`pip` 装 lz4/capstone/pillow/pyyaml/pycryptodome |
+| 1/4 | `apt` 装 python3/pip/git/adb/`libicu-dev` 等；`pip` 装 lz4/capstone/pillow/pyyaml/pycryptodome |
 | 2/4 | 装 .NET SDK 10 |
 | 3/4 | 下载 Android NDK r27c（约 1 GB），并校验版本必须是 `27.2.12479018` |
 | 4/4 | **把 NDK 的 clang 换成 Termux clang 的包装脚本**（整套环境最关键一步） |
@@ -644,7 +521,7 @@ bash termux/setup.sh
 | `proot-distro install` 卡住不动 | 网络问题，或换 F-Droid 源 `termux-change-repo` |
 | 构建到一半被杀掉 / 应用闪退 | 国产 ROM 杀后台 → 关电池优化 + `termux-wake-lock` |
 | `Extract: Permission denied ... nx_extract` | 游戏文件还在 `/sdcard` → 回第 5 步 |
-| `Couldn't find a valid ICU package` | `libicu74` 没装上 → `~/nx.sh bash -c "apt install -y libicu74"` |
+| `Couldn't find a valid ICU package` | `libicu-dev` 没装上 → `~/nx.sh bash -c "apt install -y libicu-dev"` |
 | `file /tmp/t.o` 显示 x86-64 | 第 6 步的编译器替换没成功 → 重跑 `setup-env.sh` |
 | `unable to find library -l:libunwind.a` | 同上（`-L` 指到了错架构的目录） |
 | `not enough disk space ... needs about NN GB` | 空间不够，或第 6.7 号补丁没生效 |
@@ -791,7 +668,7 @@ Android 外部存储是 `noexec`，工具会在游戏目录旁编译并执行 `n
 
 | 动作 | 说明 |
 |---|---|
-| `apt install ... libicu74` | .NET 的硬依赖，缺了报 `Couldn't find a valid ICU package` |
+| `apt install ... libicu-dev` | .NET 的硬依赖，缺了报 `Couldn't find a valid ICU package` |
 | `pip3 install --break-system-packages lz4 capstone pillow fonttools pyyaml pycryptodome` | 不要装 PySide6，命令行功能是全的 |
 | `dotnet-install.sh --channel 10.0` | 装到 `/root/dotnet` |
 | 下载 NDK r27c | 只认 r27c，会校验 `Pkg.Revision = 27.2.12479018` |
@@ -878,7 +755,7 @@ env.txt  settings.txt  nx2a-data.json  nintendo_ext.ttf
 
 | 现象 | 原因 / 处理 |
 |---|---|
-| `Couldn't find a valid ICU package` | 缺 libicu → `apt install -y libicu74` |
+| `Couldn't find a valid ICU package` | 缺 libicu → `apt install -y libicu-dev` |
 | `git push origin` 被拒 / 推到上游去了 | `origin` 指到了 `shirai91/nx2android` → 见「第 0 步」，改指自己的 fork |
 | rootfs 里的代码是旧的 | `setup.sh` 是复制不是挂载 → Termux 里跑 `bash termux/sync.sh` |
 | 第二次跑 build.sh，mods 一个都没内包 | 已修：`STEM` 现在从 `*-data` 目录推，不再误选 `-termux.apk` |

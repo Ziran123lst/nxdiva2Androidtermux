@@ -126,7 +126,7 @@ Android 外部存储是 `noexec`，工具会在游戏目录旁编译并执行 `n
 
 | 动作 | 说明 |
 |---|---|
-| `apt install ... libicu74` | .NET 的硬依赖，缺了报 `Couldn't find a valid ICU package` |
+| `apt install ... libicu-dev` | .NET 的硬依赖，缺了报 `Couldn't find a valid ICU package` |
 | `pip3 install --break-system-packages lz4 capstone pillow fonttools pyyaml pycryptodome` | 不要装 PySide6，命令行功能是全的 |
 | `dotnet-install.sh --channel 10.0` | 装到 `/root/dotnet` |
 | 下载 NDK r27c | 只认 r27c，会校验 `Pkg.Revision = 27.2.12479018` |
@@ -213,7 +213,7 @@ env.txt  settings.txt  nx2a-data.json  nintendo_ext.ttf
 
 | 现象 | 原因 / 处理 |
 |---|---|
-| `Couldn't find a valid ICU package` | 缺 libicu → `apt install -y libicu74` |
+| `Couldn't find a valid ICU package` | 缺 libicu → `apt install -y libicu-dev` |
 | `git push origin` 被拒 / 推到上游去了 | `origin` 指到了 `shirai91/nx2android` → 见「第 0 步」，改指自己的 fork |
 | rootfs 里的代码是旧的 | `setup.sh` 是复制不是挂载 → Termux 里跑 `bash termux/sync.sh` |
 | 第二次跑 build.sh，mods 一个都没内包 | 已修：`STEM` 现在从 `*-data` 目录推，不再误选 `-termux.apk` |

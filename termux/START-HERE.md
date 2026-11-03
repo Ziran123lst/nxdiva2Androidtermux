@@ -132,7 +132,7 @@ bash termux/setup.sh
 
 1. 更新 Termux 并装 `proot-distro clang lld llvm binutils git curl shaderc`
 2. 申请存储权限
-3. 装 Ubuntu 24.04（proot 里的 rootfs）
+3. 装 Ubuntu（版本由 proot-distro 决定，本机实测为 26.04）
 4. 写 `~/nx.sh`（进 Ubuntu 的启动脚本）
 5. 把仓库复制进 Ubuntu 的 `/root/nxdiva2Androidtermux`
 
@@ -192,7 +192,7 @@ Ubuntu 里 `/root` 是 ext4，能执行。
 
 | 步骤 | 内容 |
 |---|---|
-| 1/4 | `apt` 装 python3/pip/git/adb/`libicu74` 等；`pip` 装 lz4/capstone/pillow/pyyaml/pycryptodome |
+| 1/4 | `apt` 装 python3/pip/git/adb/`libicu-dev` 等；`pip` 装 lz4/capstone/pillow/pyyaml/pycryptodome |
 | 2/4 | 装 .NET SDK 10 |
 | 3/4 | 下载 Android NDK r27c（约 1 GB），并校验版本必须是 `27.2.12479018` |
 | 4/4 | **把 NDK 的 clang 换成 Termux clang 的包装脚本**（整套环境最关键一步） |
@@ -319,7 +319,7 @@ bash termux/setup.sh
 | `proot-distro install` 卡住不动 | 网络问题，或换 F-Droid 源 `termux-change-repo` |
 | 构建到一半被杀掉 / 应用闪退 | 国产 ROM 杀后台 → 关电池优化 + `termux-wake-lock` |
 | `Extract: Permission denied ... nx_extract` | 游戏文件还在 `/sdcard` → 回第 5 步 |
-| `Couldn't find a valid ICU package` | `libicu74` 没装上 → `~/nx.sh bash -c "apt install -y libicu74"` |
+| `Couldn't find a valid ICU package` | `libicu-dev` 没装上 → `~/nx.sh bash -c "apt install -y libicu-dev"` |
 | `file /tmp/t.o` 显示 x86-64 | 第 6 步的编译器替换没成功 → 重跑 `setup-env.sh` |
 | `unable to find library -l:libunwind.a` | 同上（`-L` 指到了错架构的目录） |
 | `not enough disk space ... needs about NN GB` | 空间不够，或第 6.7 号补丁没生效 |

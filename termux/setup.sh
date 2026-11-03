@@ -67,7 +67,9 @@ step "5/5 把仓库与 setup-env.sh 放进 Ubuntu"
 # 用 bind 进来的 Termux home 复制，不依赖 rootfs 的实际路径
 "$HOME/nx.sh" bash -c "rm -rf /root/nxdiva2Androidtermux; cp -a /termux/home/$(basename "$REPO") /root/"
 
-cat > /tmp/setup-env.sh <<'EOS_ENV'
+# Termux 的根目录是只读的、没有 /tmp；临时文件用 $TMPDIR（=$PREFIX/tmp），回退到 $HOME
+TMPF="${TMPDIR:-$HOME}/setup-env.sh"
+cat > "$TMPF" <<'EOS_ENV'
 #!/bin/bash
 # 阶段 1-4（指南第 2-5 节）：Ubuntu 依赖 / .NET 10 / NDK r27c / 用 Termux clang 顶替 NDK clang。
 # 在 Ubuntu 里执行：  bash /root/setup-env.sh
@@ -149,7 +151,7 @@ printf '  cd /root/nxdiva2Androidtermux\n'
 printf '  source /root/nx-env.sh && python3 -m porter doctor\n'
 EOS_ENV
 
-"$HOME/nx.sh" bash -c 'cat > /root/setup-env.sh' < /tmp/setup-env.sh
+"$HOME/nx.sh" bash -c 'cat > /root/setup-env.sh' < "$TMPF"
 "$HOME/nx.sh" bash -c 'chmod +x /root/setup-env.sh; wc -l /root/setup-env.sh'
 
 printf '\n\033[1mTermux 侧就绪。\033[0m 下一步：\n'
