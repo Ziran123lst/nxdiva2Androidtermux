@@ -3,6 +3,10 @@
 把 Switch 游戏移植成安卓 APK 的完整流程，全部在手机上完成。
 验证过的游戏：初音ミク Project DIVA MEGA39's（Title ID `0100F3100DA46000`，JP，1.0.9）。
 
+> **完全没接触过 Termux？先看 [START-HERE.md](START-HERE.md)** —— 那是从零开始的
+> 逐步教学（装哪个版本的 Termux、怎么粘贴命令、每一步在哪一层执行）。
+> 本文档是给已经知道自己在做什么的人看的速查版。
+
 **前置条件**
 
 - 骁龙（Adreno，需支持 BC 纹理）、Android 12+、剩余空间 ≥ 40 GB
